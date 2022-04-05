@@ -1,28 +1,81 @@
 package com.example.coremakertest.services;
 
+import com.example.coremakertest.models.ReceivingMessageDTO;
 import com.example.coremakertest.models.User;
+import com.example.coremakertest.security.JWTUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
-import java.util.HashMap;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import javax.persistence.Tuple;
+import javax.swing.text.html.Option;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class UserService {
 
-    @Value("${jwt.token}")
-    private String jwtSecret;
+    @Autowired
+    private UserRepository userRepository;
 
-    private Map<String, User> users = new HashMap<>();
+    @Autowired
+    private JWTUtil jwtUtil;
+
+    private final BCryptPasswordEncoder bCryptPasswordEncoder = new BCryptPasswordEncoder();
 
     public boolean addUser(User user) {
         if(isValid(user)){
-            if(user.getPassword() != null) {
-                users.put(user.getUsername(), user);
+            if(userRepository.findById(user.getUsername()).isEmpty()) {
+                user.setPassword(bCryptPasswordEncoder.encode(user.getPassword()));
+                userRepository.save(user);
                 return true;
-                //hashMap doesn't allow duplicate keys - overwrites with new values
             }
         }
         return false;
+    }
+
+    public ReceivingMessageDTO changePassword(String username, String oldPassword, String newPassword) {
+        ReceivingMessageDTO rm = new ReceivingMessageDTO();
+        rm.setBool(false);
+
+        if(username == null) {
+            rm.setMessage("User not found for the selected token");
+            return rm;
+        }
+
+        Optional<User> user = userRepository.findById(username);
+        if(user.isEmpty()) {
+            rm.setMessage("User not found in the DB");
+            return rm;
+        }
+
+        if(!bCryptPasswordEncoder.matches(oldPassword, user.get().getPassword())) {
+            rm.setMessage("The old password you entered is incorrect");
+            return rm;
+        }
+
+        if(newPassword == null || newPassword.isEmpty()) {
+            rm.setMessage("New password is empty");
+            return rm;
+        }
+
+        if(newPassword.equals(oldPassword)) {
+            rm.setMessage("New password should be different from old password");
+            return rm;
+        }
+
+        String oldP = user.get().getPassword();
+        String newP = bCryptPasswordEncoder.encode(newPassword);
+        user.get().setPassword(newP);
+        userRepository.save(user.get());
+        String message = "Password changed" + "\nOld Password: " + oldP + "\nNew Password: " + newP;
+        rm.setMessage(message);
+        rm.setBool(true);
+        return rm;
     }
 
     private boolean isValid(User user) {
@@ -38,19 +91,16 @@ public class UserService {
         if(user.getName() == null && !user.getName().isEmpty()) {
             return false;
         }
-        if(user.getSurname() == null && !user.getSurname().isEmpty()) {
-            return false;
-        }
-        return true;
+        return user.getSurname() != null || user.getSurname().isEmpty();
     }
 
     public String login(String username, String password) {
-        User user = users.get(username);
-        if(user == null) {
+        Optional<User> user = userRepository.findById(username);
+        if(user.isEmpty()) {
             return null;
         }
-        else if(user.getPassword().equals(password)) {
-            return jwtSecret;
+        else if(bCryptPasswordEncoder.matches(password, user.get().getPassword())){
+            return jwtUtil.generateToken(username);
         }
         else {
             return null;
@@ -58,10 +108,15 @@ public class UserService {
     }
 
     public User getUser(String username) {
-        return users.get(username);
+        Optional<User> user = userRepository.findById(username);
+        return user.orElse(null);
     }
 
-    public boolean verifyToken(String token) {
-        return jwtSecret.equals(token);
+    public String verifyToken(String token) {
+        try {
+            return jwtUtil.validateTokenAndRetrieveSubject(token);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 }
